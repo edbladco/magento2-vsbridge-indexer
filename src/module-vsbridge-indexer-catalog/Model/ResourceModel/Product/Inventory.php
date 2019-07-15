@@ -83,6 +83,22 @@ class Inventory
         $websiteId = $this->getWebsiteId();
         $connection = $this->resource->getConnection();
 
+        $fieldsToOverride = [
+            'qty',
+            'is_in_stock'
+        ];
+
+        foreach ($fieldsToOverride as $field) {
+            if (($key = array_search($field, $fields)) !== false) {
+                unset($fields[$key]);
+            }
+        }
+
+        $expressionsToSelect = [
+            new \Zend_Db_Expr('main_table.qty + SUM(COALESCE(reservation_table.quantity, 0)) AS qty'),
+            new \Zend_Db_Expr('CASE WHEN main_table.qty + SUM(COALESCE(reservation_table.quantity, 0)) > 0 || SUM(reservation_table.quantity) IS NULL THEN main_table.is_in_stock ELSE 0 END AS is_in_stock')
+        ];
+
         $select = $connection->select()
             ->from(
                 ['main_table' => $this->resource->getTableName('cataloginventory_stock_item')],
@@ -102,6 +118,25 @@ class Inventory
                 $websiteId
             ),
             ['stock_status']
+        );
+
+        $select->joinLeft(
+            ['product_table' => $this->resource->getTableName('catalog_product_entity')],
+            'main_table.product_id=product_table.entity_id'
+        );
+
+        $select->joinLeft(
+            ['reservation_table' => $this->resource->getTableName('inventory_reservation')],
+            'reservation_table.sku=product_table.sku AND main_table.stock_id = reservation_table.stock_id',
+            $expressionsToSelect
+        );
+
+        $select->group(
+            [
+                'main_table.product_id',
+                'main_table.item_id',
+                'main_table.stock_id'
+            ]
         );
 
         return $connection->fetchAssoc($select);
