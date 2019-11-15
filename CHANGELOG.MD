@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-## [1.8.0] (2019.11.20)
-
 ### Added
 - Add "final_price" to "configurable_children" ([#151](https://github.com/DivanteLtd/magento2-vsbridge-indexer/issues/151))
 
