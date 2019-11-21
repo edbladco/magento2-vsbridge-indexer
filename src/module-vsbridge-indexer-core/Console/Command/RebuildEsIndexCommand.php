@@ -8,39 +8,40 @@
 
 namespace Divante\VsbridgeIndexerCore\Console\Command;
 
-use Magento\Backend\App\Area\FrontNameResolver;
-use Symfony\Component\Console\Command\Command;
-use Magento\Framework\Indexer\IndexerInterface;
-use Divante\VsbridgeIndexerCatalog\Model\Indexer\ProductCategoryProcessor;
+use Divante\VsbridgeIndexerCore\Indexer\StoreManager;
+use Divante\VsbridgeIndexerCore\Api\IndexOperationInterface;
+use Divante\VsbridgeIndexerCore\Model\IndexerRegistry as IndexerRegistry;
+use Magento\Framework\App\ObjectManagerFactory;
 use Magento\Framework\Console\Cli;
+use Magento\Framework\Exception\LocalizedException;
+use Magento\Framework\Indexer\IndexerInterface;
+use Magento\Indexer\Console\Command\AbstractIndexerCommand;
+use Magento\Store\Api\Data\StoreInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
-use Magento\Framework\Exception\LocalizedException;
-use Symfony\Component\Console\Input\InputArgument;
-use Symfony\Component\Console\Input\InputOption;
-use Divante\VsbridgeIndexerCore\Index\IndexOperations;
-use Magento\Store\Model\StoreManagerInterface;
-use Magento\Framework\Indexer\IndexerRegistry;
+use Magento\Store\Model\StoreManagerInterface as StoreManagerInterface;
 
 /**
  * Class IndexerReindexCommand
  */
-class RebuildEsIndexCommand extends Command
+class RebuildEsIndexCommand extends AbstractIndexerCommand
 {
     const INPUT_STORE = 'store';
-    const INPUT_DELETE_INDEX = 'delete-index';
+
+    const INPUT_ALL_STORES = 'all';
 
     const INDEX_IDENTIFIER = 'vue_storefront_catalog';
 
     /**
-     * @var \Magento\Indexer\Model\Indexer\CollectionFactory
-     */
-    private $collectionFactory;
-
-    /**
-     * @var IndexOperations
+     * @var IndexOperationInterface
      */
     private $indexOperations;
+
+    /**
+     * @var StoreManager
+     */
+    private $indexerStoreManager;
 
     /**
      * @var StoreManagerInterface
@@ -53,28 +54,22 @@ class RebuildEsIndexCommand extends Command
     private $indexerRegistry;
 
     /**
-     * @var \Magento\Framework\App\State
+     * @var array
      */
-    private $state;
+    private $excludeIndices = [];
 
     /**
-     * Constructor
+     * RebuildEsIndexCommand constructor.
      *
-     * @param \Magento\Indexer\Model\Indexer\CollectionFactory|null $collectionFactory
+     * @param ObjectManagerFactory $objectManagerFactory
+     * @param array $excludeIndices
      */
     public function __construct(
-        IndexerRegistry $indexerRegistry,
-        IndexOperations\Proxy $indexOperations,
-        StoreManagerInterface\Proxy $storeManager,
-        \Magento\Framework\App\State\Proxy $state,
-        \Magento\Indexer\Model\Indexer\CollectionFactory\Proxy $collectionFactory
+        ObjectManagerFactory $objectManagerFactory,
+        array $excludeIndices = []
     ) {
-        $this->indexerRegistry = $indexerRegistry;
-        $this->collectionFactory = $collectionFactory;
-        $this->indexOperations = $indexOperations;
-        $this->storeManager = $storeManager;
-        $this->state = $state;
-        parent::__construct();
+        $this->excludeIndices = $excludeIndices;
+        parent::__construct($objectManagerFactory);
     }
 
     /**
@@ -89,15 +84,14 @@ class RebuildEsIndexCommand extends Command
             self::INPUT_STORE,
             null,
             InputOption::VALUE_REQUIRED,
-            'Store ID'
+            'Store ID or Store Code'
         );
 
-
         $this->addOption(
-            self::INPUT_DELETE_INDEX,
+            self::INPUT_ALL_STORES,
             null,
             InputOption::VALUE_NONE,
-            'Delete previous index and create new one (with new mapping)'
+            'Reindex all stores'
         );
 
         parent::configure();
@@ -108,70 +102,200 @@ class RebuildEsIndexCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output)
     {
-        $storeId = (int)$input->getOption(self::INPUT_STORE);
+        $this->initObjectManager();
+        $output->setDecorated(true);
+        $storeId = $input->getOption(self::INPUT_STORE);
+        $allStores = $input->getOption(self::INPUT_ALL_STORES);
 
-        if ($storeId) {
-            $this->setAreaCode();
-            $store = $this->storeManager->getStore($storeId);
-            $deleteIndex = $input->getOption(self::INPUT_DELETE_INDEX);
+        $invalidIndices = $this->getInvalidIndices();
 
-            if ($deleteIndex) {
-                $this->indexOperations->deleteIndex(self::INDEX_IDENTIFIER, $store);
-                $this->indexOperations->createIndex(self::INDEX_IDENTIFIER, $store);
-            }
+        if (!empty($invalidIndices)) {
+            $message = 'Some indices has invalid status: '. implode(', ', $invalidIndices) . '. ';
+            $message .= 'Please change indices status to VALID manually.';
+            $output->writeln("<info>WARNING: Indexation can't be executed. $message</info>");
+            return;
+        }
 
-            $returnValue = Cli::RETURN_FAILURE;
-
-            foreach ($this->getIndexers($input) as $indexer) {
-                try {
-                    $startTime = microtime(true);
-
-                    $indexer->reindexAll();
-
-                    $resultTime = microtime(true) - $startTime;
-                    $output->writeln(
-                        $indexer->getTitle() . ' index has been rebuilt successfully in ' . gmdate('H:i:s', $resultTime)
-                    );
-                    $returnValue = Cli::RETURN_SUCCESS;
-                } catch (LocalizedException $e) {
-                    $output->writeln($e->getMessage());
-                } catch (\Exception $e) {
-                    $output->writeln($indexer->getTitle() . ' indexer process unknown error:');
-                    $output->writeln($e->getMessage());
-                }
-            }
-
-            return $returnValue;
+        if (!$storeId && !$allStores) {
+            $output->writeln(
+                "<comment>Not enough information provided, nothing has been reindexed. Try using --help for more information.</comment>"
+            );
+        } else {
+            $this->reindex($output, $storeId, $allStores);
         }
     }
 
     /**
-     * @return void
+     * @return array
      */
-    private function setAreaCode()
+    private function getInvalidIndices()
     {
-        try {
-            $this->state->setAreaCode(FrontNameResolver::AREA_CODE);
-        } catch (\Exception $e) {
+        $invalid = [];
+
+        foreach ($this->getIndexers() as $indexer) {
+            if ($indexer->isWorking()) {
+                $invalid[] = $indexer->getTitle();
+            }
         }
+
+        return $invalid;
+    }
+
+    /***
+     * @param OutputInterface $output
+     * @param $storeId
+     * @param $allStores
+     *
+     * @return int
+     * @throws \Magento\Framework\Exception\NoSuchEntityException
+     */
+    private function reindex(OutputInterface $output, $storeId, $allStores)
+    {
+
+        if ($storeId) {
+            $store = $this->getStoreManager()->getStore($storeId);
+            $output->writeln("<info>Reindexing all VS indexes for store " . $store->getName() . "...</info>");
+
+            $returnValue = $this->reindexStore($store, $output);
+
+            $output->writeln("<info>Reindexing has completed!</info>");
+
+            return $returnValue;
+
+        } elseif ($allStores) {
+            $output->writeln("<info>Reindexing all stores...</info>");
+            $returnValues = [];
+
+            /** @var \Magento\Store\Api\Data\StoreInterface $store */
+            foreach ($this->getStoreManager()->getStores() as $store) {
+                $output->writeln("<info>Reindexing store " . $store->getName() . "...</info>");
+                $returnValues[] = $this->reindexStore($store, $output);
+            }
+
+            $output->writeln("<info>All stores have been reindexed!</info>");
+
+            // If failure returned in any store return failure now
+            return in_array(Cli::RETURN_FAILURE, $returnValues) ? Cli::RETURN_FAILURE : Cli::RETURN_SUCCESS;
+        }
+    }
+
+    /**
+     * Reindex each vsbridge index for the specified store
+     *
+     * @param \Magento\Store\Api\Data\StoreInterface $store
+     * @param \Symfony\Component\Console\Output\OutputInterface $output
+     *
+     * @return int
+     */
+    private function reindexStore(StoreInterface $store, OutputInterface $output)
+    {
+        $this->getIndexerStoreManager()->setLoadedStores([$store]);
+        $index = $this->getIndexOperations()->createIndex(self::INDEX_IDENTIFIER, $store);
+        $this->getIndexerRegistry()->setFullReIndexationIsInProgress();
+
+        $returnValue = Cli::RETURN_FAILURE;
+
+        foreach ($this->getIndexers() as $indexer) {
+            try {
+                $startTime = microtime(true);
+                $indexer->reindexAll();
+
+                $resultTime = microtime(true) - $startTime;
+                $output->writeln(
+                    $indexer->getTitle() . ' index has been rebuilt successfully in ' . gmdate('H:i:s', $resultTime)
+                );
+                $returnValue = Cli::RETURN_SUCCESS;
+            } catch (LocalizedException $e) {
+                $output->writeln("<error>" . $e->getMessage() . "</error>");
+            } catch (\Exception $e) {
+                $output->writeln("<error>" . $indexer->getTitle() . ' indexer process unknown error:</error>');
+                $output->writeln("<error>" . $e->getMessage() . "</error>");
+            }
+        }
+
+        $this->indexOperations->switchIndexer($index->getName(), $index->getIdentifier());
+
+        $output->writeln(
+            sprintf('<info>Index name: %s, index alias: %s</info>', $index->getName(), $index->getIdentifier())
+        );
+        $this->getIndexOperations()->switchIndexer($index->getName(), $index->getIdentifier());
+
+        return $returnValue;
     }
 
     /**
      * @return IndexerInterface[]
      */
-    protected function getIndexers(InputInterface $input)
+    private function getIndexers()
     {
         /** @var IndexerInterface[] */
-        $indexers = $this->collectionFactory->create()->getItems();
-        unset($indexers[ProductCategoryProcessor::INDEXER_ID]);
+        $indexers = $this->getAllIndexers();
         $vsbridgeIndexers = [];
 
         foreach ($indexers as $indexer) {
-            if (substr($indexer->getId(), 0, 9) === 'vsbridge_') {
+            $indexId = $indexer->getId();
+
+            if (substr($indexId, 0, 9) === 'vsbridge_' && !in_array($indexId, $this->excludeIndices)) {
                 $vsbridgeIndexers[] = $indexer;
             }
         }
 
         return $vsbridgeIndexers;
+    }
+
+    /**
+     * @return StoreManagerInterface
+     */
+    private function getStoreManager()
+    {
+        if (null === $this->storeManager) {
+            $this->storeManager = $this->getObjectManager()->get(StoreManagerInterface::class);
+        }
+
+        return $this->storeManager;
+    }
+
+    /**
+     * @return StoreManager
+     */
+    private function getIndexerStoreManager()
+    {
+        if (null === $this->indexerStoreManager) {
+            $this->indexerStoreManager = $this->getObjectManager()->get(StoreManager::class);
+        }
+
+        return $this->indexerStoreManager;
+    }
+
+    /**
+     * @return IndexerRegistry
+     */
+    private function getIndexerRegistry()
+    {
+        if (null === $this->indexerRegistry) {
+            $this->indexerRegistry = $this->getObjectManager()->get(IndexerRegistry::class);
+        }
+
+        return $this->indexerRegistry;
+    }
+
+    /**
+     * @return IndexOperationInterface
+     */
+    private function getIndexOperations()
+    {
+        if (null === $this->indexOperations) {
+            $this->indexOperations = $this->getObjectManager()->get(IndexOperationInterface::class);
+        }
+
+        return $this->indexOperations;
+    }
+
+    /**
+     * Initiliaze object manager
+     */
+    private function initObjectManager()
+    {
+        $this->getObjectManager();
     }
 }

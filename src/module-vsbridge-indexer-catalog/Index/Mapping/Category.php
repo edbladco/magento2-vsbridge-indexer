@@ -9,7 +9,7 @@
 namespace Divante\VsbridgeIndexerCatalog\Index\Mapping;
 
 use Divante\VsbridgeIndexerCatalog\Model\Attributes\CategoryChildAttributes;
-use Divante\VsbridgeIndexerCatalog\Model\ResourceModel\Category\AttributeDataProvider;
+use Divante\VsbridgeIndexerCatalog\Model\ResourceModel\Category\LoadAttributes;
 use Divante\VsbridgeIndexerCore\Api\MappingInterface;
 use Divante\VsbridgeIndexerCore\Api\Mapping\FieldInterface;
 use Divante\VsbridgeIndexerCore\Index\Mapping\GeneralMapping;
@@ -20,7 +20,6 @@ use Magento\Framework\Event\ManagerInterface as EventManager;
  */
 class Category extends AbstractMapping implements MappingInterface
 {
-
     /**
      * @var array
      */
@@ -40,7 +39,7 @@ class Category extends AbstractMapping implements MappingInterface
     private $generalMapping;
 
     /**
-     * @var AttributeDataProvider
+     * @var LoadAttributes
      */
     private $resourceModel;
 
@@ -60,18 +59,21 @@ class Category extends AbstractMapping implements MappingInterface
      * @param EventManager $eventManager
      * @param GeneralMapping $generalMapping
      * @param CategoryChildAttributes $categoryChildAttributes
-     * @param AttributeDataProvider $resourceModel
+     * @param LoadAttributes $resourceModel
+     * @param array $staticFieldMapping
      */
     public function __construct(
         EventManager $eventManager,
         GeneralMapping $generalMapping,
         CategoryChildAttributes $categoryChildAttributes,
-        AttributeDataProvider $resourceModel
+        LoadAttributes $resourceModel,
+        array $staticFieldMapping
     ) {
         $this->eventManager = $eventManager;
         $this->generalMapping = $generalMapping;
         $this->resourceModel = $resourceModel;
         $this->childAttributes = $categoryChildAttributes;
+        parent::__construct($staticFieldMapping);
     }
 
     /**
@@ -159,6 +161,6 @@ class Category extends AbstractMapping implements MappingInterface
      */
     public function getAttributes()
     {
-        return $this->resourceModel->initAttributes();
+        return $this->resourceModel->execute();
     }
 }

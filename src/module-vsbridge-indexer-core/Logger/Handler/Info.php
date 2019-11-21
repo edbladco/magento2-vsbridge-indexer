@@ -12,7 +12,7 @@ use Magento\Framework\Logger\Handler\Base;
 use Monolog\Logger;
 
 /**
- * Class Error
+ * Class Info
  */
 class Info extends Base
 {

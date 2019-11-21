@@ -6,7 +6,7 @@ use Divante\VsbridgeIndexerCore\Api\Mapping\FieldInterface;
 use Divante\VsbridgeIndexerCore\Api\MappingInterface;
 use Divante\VsbridgeIndexerCore\Index\Mapping\GeneralMapping;
 use Divante\VsbridgeIndexerCatalog\Model\Attributes\ConfigurableAttributes;
-use Divante\VsbridgeIndexerCatalog\Model\ResourceModel\Product\AttributeDataProvider;
+use Divante\VsbridgeIndexerCatalog\Model\ResourceModel\Product\LoadAttributes;
 use Magento\Framework\Event\ManagerInterface as EventManager;
 
 /**
@@ -14,7 +14,6 @@ use Magento\Framework\Event\ManagerInterface as EventManager;
  */
 class Product extends AbstractMapping implements MappingInterface
 {
-
     /**
      * @var EventManager
      */
@@ -31,7 +30,7 @@ class Product extends AbstractMapping implements MappingInterface
     private $properties;
 
     /**
-     * @var AttributeDataProvider
+     * @var LoadAttributes
      */
     private $resourceModel;
 
@@ -46,18 +45,21 @@ class Product extends AbstractMapping implements MappingInterface
      * @param EventManager $eventManager
      * @param GeneralMapping $generalMapping
      * @param ConfigurableAttributes $configurableAttributes
-     * @param AttributeDataProvider $resourceModel
+     * @param LoadAttributes $resourceModel
+     * @param array $staticFieldMapping
      */
     public function __construct(
         EventManager $eventManager,
         GeneralMapping $generalMapping,
         ConfigurableAttributes $configurableAttributes,
-        AttributeDataProvider $resourceModel
+        LoadAttributes $resourceModel,
+        array $staticFieldMapping
     ) {
         $this->eventManager = $eventManager;
         $this->generalMapping = $generalMapping;
         $this->resourceModel = $resourceModel;
         $this->configurableAttributes = $configurableAttributes;
+        parent::__construct($staticFieldMapping);
     }
 
     /**
@@ -209,6 +211,8 @@ class Product extends AbstractMapping implements MappingInterface
                 'values' => [
                     'properties' => [
                         'value_index' => ['type' => FieldInterface::TYPE_KEYWORD],
+                        'label' => ['type' => FieldInterface::TYPE_TEXT],
+                        'swatch' => $this->generalMapping->getSwatchProperties(),
                     ],
                 ],
             ],
@@ -281,7 +285,7 @@ class Product extends AbstractMapping implements MappingInterface
                 'price' => ['type' => FieldInterface::TYPE_DOUBLE],
                 'price_type' => ['type' => FieldInterface::TYPE_TEXT],
                 'sku' => ['type' => FieldInterface::TYPE_KEYWORD],
-                'sort_order' => ['type' => FieldInterface::TYPE_LONG],
+                'sort_order' => ['type' => FieldInterface::TYPE_INTEGER],
                 'title' => ['type' => FieldInterface::TYPE_TEXT],
                 'type' => ['type' => FieldInterface::TYPE_TEXT],
                 'values' => [
@@ -290,7 +294,7 @@ class Product extends AbstractMapping implements MappingInterface
                         'price' => ['type' => FieldInterface::TYPE_DOUBLE],
                         'title' => ['type' => FieldInterface::TYPE_TEXT],
                         'price_type' => ['type' => FieldInterface::TYPE_TEXT],
-                        'sort_order' => ['type' => FieldInterface::TYPE_LONG],
+                        'sort_order' => ['type' => FieldInterface::TYPE_INTEGER],
                         'option_type_id' => ['type' => FieldInterface::TYPE_INTEGER],
                     ]
                 ]
@@ -310,7 +314,7 @@ class Product extends AbstractMapping implements MappingInterface
                 'value' => ['type' => FieldInterface::TYPE_DOUBLE],
                 'extension_attributes' => [
                     'properties' => [
-                        'website_id' => ['type' => FieldInterface::TYPE_INTEGER]
+                        'website_id' => ['type' => FieldInterface::TYPE_SHORT]
                     ],
                 ],
             ],
@@ -323,6 +327,6 @@ class Product extends AbstractMapping implements MappingInterface
      */
     public function getAttributes()
     {
-        return $this->resourceModel->getAttributesById();
+        return $this->resourceModel->execute();
     }
 }

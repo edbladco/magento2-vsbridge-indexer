@@ -10,18 +10,19 @@ namespace Divante\VsbridgeIndexerCore\Indexer;
 
 use Divante\VsbridgeIndexerCore\Api\BulkResponseInterface;
 use Divante\VsbridgeIndexerCore\Api\Client\ClientInterface;
-use Divante\VsbridgeIndexerCore\Api\ConvertDataTypesInterface;
 use Divante\VsbridgeIndexerCore\Api\IndexInterface;
 use Divante\VsbridgeIndexerCore\Api\IndexOperationInterface;
 use Divante\VsbridgeIndexerCore\Api\Indexer\TransactionKeyInterface;
+use Divante\VsbridgeIndexerCore\Exception\ConnectionDisabledException;
+use Divante\VsbridgeIndexerCore\Model\IndexerRegistry as IndexerRegistry;
 use Magento\Framework\Indexer\SaveHandler\Batch;
 use Magento\Framework\Event\ManagerInterface as EventManager;
 use Magento\Store\Api\Data\StoreInterface;
 use Psr\Log\LoggerInterface;
-use Divante\VsbridgeIndexerCore\Exception\ConnectionDisabledException;
 
 /**
  * Class IndexerHandler
+ * TODO refactor - coupling between objects
  */
 class GenericIndexerHandler
 {
@@ -31,9 +32,14 @@ class GenericIndexerHandler
     private $batch;
 
     /**
-     * @var IndexOperationInterface
+     * @var \Divante\VsbridgeIndexerCore\Index\IndexOperations
      */
     private $indexOperation;
+
+    /**
+     * @var IndexerRegistry
+     */
+    private $indexerRegistry;
 
     /**
      * @var ClientInterface
@@ -56,11 +62,6 @@ class GenericIndexerHandler
     private $eventManager;
 
     /**
-     * @var ConvertDataTypesInterface
-     */
-    private $convertDataTypes;
-
-    /**
      * @var int|string
      */
     private $transactionKey;
@@ -71,12 +72,12 @@ class GenericIndexerHandler
     private $logger;
 
     /**
-     * IndexerHandler constructor.
+     * GenericIndexerHandler constructor.
      *
      * @param ClientInterface $client
      * @param LoggerInterface $logger
      * @param IndexOperationInterface $indexOperation
-     * @param ConvertDataTypesInterface $convertDataTypes
+     * @param IndexerRegistry $indexerRegistry
      * @param EventManager $eventManager
      * @param Batch $batch
      * @param TransactionKeyInterface $transactionKey
@@ -87,7 +88,7 @@ class GenericIndexerHandler
         ClientInterface $client,
         LoggerInterface $logger,
         IndexOperationInterface $indexOperation,
-        ConvertDataTypesInterface $convertDataTypes,
+        IndexerRegistry $indexerRegistry,
         EventManager $eventManager,
         Batch $batch,
         TransactionKeyInterface $transactionKey,
@@ -98,9 +99,9 @@ class GenericIndexerHandler
         $this->batch = $batch;
         $this->client = $client;
         $this->indexOperation = $indexOperation;
-        $this->convertDataTypes = $convertDataTypes;
         $this->typeName = $typeName;
         $this->indexIdentifier = $indexIdentifier;
+        $this->indexerRegistry = $indexerRegistry;
         $this->eventManager = $eventManager;
         $this->transactionKey = $transactionKey->load();
     }
@@ -139,8 +140,6 @@ class GenericIndexerHandler
                     }
                 }
 
-                $docs = $this->convertDataTypes->castFieldsUsingMapping($type, $docs);
-
                 $bulkRequest = $this->indexOperation->createBulk()->updateDocuments(
                     $index->getName(),
                     $this->typeName,
@@ -153,7 +152,7 @@ class GenericIndexerHandler
             }
 
             $this->indexOperation->refreshIndex($index);
-        }  catch (ConnectionDisabledException $exception) {
+        } catch (ConnectionDisabledException $exception) {
             // do nothing, ES indexer disabled in configuration
         }
     }
@@ -169,6 +168,7 @@ class GenericIndexerHandler
         try {
             $index = $this->getIndex($store);
             $type = $index->getType($this->typeName);
+
             $storeId = (int)$store->getId();
 
             foreach ($this->batch->getItems($documents, $this->getBatchSize()) as $docs) {
@@ -178,24 +178,29 @@ class GenericIndexerHandler
                     }
                 }
 
-                $docs = $this->convertDataTypes->castFieldsUsingMapping($type, $docs);
-                $bulkRequest = $this->indexOperation->createBulk()->addDocuments(
-                    $index->getName(),
-                    $this->typeName,
-                    $docs
-                );
+                if (!empty($docs)) {
+                    $bulkRequest = $this->indexOperation->createBulk()->addDocuments(
+                        $index->getName(),
+                        $this->typeName,
+                        $docs
+                    );
 
-                $response = $this->indexOperation->executeBulk($bulkRequest);
-                $this->logErrors($response);
-                $this->eventManager->dispatch(
-                    'search_engine_save_documents_after',
-                    [
-                        'data_type' => $this->typeName,
-                        'bulk_response' => $response,
-                    ]
-                );
+                    $response = $this->indexOperation->executeBulk($bulkRequest);
+                    $this->logErrors($response);
+                    $this->eventManager->dispatch(
+                        'search_engine_save_documents_after',
+                        [
+                            'data_type' => $this->typeName,
+                            'bulk_response' => $response,
+                        ]
+                    );
+                }
 
                 $docs = null;
+            }
+
+            if ($index->isNew() && !$this->indexerRegistry->isFullReIndexationRunning()) {
+                $this->indexOperation->switchIndexer($index->getName(), $index->getIdentifier());
             }
 
             $this->indexOperation->refreshIndex($index);
@@ -213,9 +218,9 @@ class GenericIndexerHandler
     public function cleanUpByTransactionKey(StoreInterface $store, array $docIds = null)
     {
         try {
-            $indexName = $this->indexOperation->getIndexName($store);
+            $indexAlias = $this->indexOperation->getIndexAlias($store);
 
-            if ($this->indexOperation->indexExists($indexName)) {
+            if ($this->indexOperation->indexExists($indexAlias)) {
                 $index = $this->indexOperation->getIndexByName($this->indexIdentifier, $store);
                 $transactionKeyQuery = ['must_not' => ['term' => ['tsk' => $this->transactionKey]]];
                 $query = ['query' => ['bool' => $transactionKeyQuery]];
@@ -263,6 +268,8 @@ class GenericIndexerHandler
 
     /**
      * @param BulkResponseInterface $bulkResponse
+     *
+     * @return void
      */
     private function logErrors(BulkResponseInterface $bulkResponse)
     {
