@@ -98,6 +98,14 @@ class ChildAttributesProcessor
             foreach ($priceData as $childId => $priceDataRow) {
                 $allChildren[$childId]['final_price'] = (float)$priceDataRow['final_price'];
                 $allChildren[$childId]['regular_price'] = (float)$priceDataRow['price'];
+
+                /**
+                 * @author Andreas Karlsson <andreas@kodbruket.se>
+                 */
+                if ($allChildren[$childId]['regular_price'] >= $allChildren[$childId]['final_price']) {
+                    $allChildren[$childId]['special_price'] = $allChildren[$childId]['final_price'];
+                }
+
             }
 
             foreach ($allAttributesData as $childId => $attributes) {
