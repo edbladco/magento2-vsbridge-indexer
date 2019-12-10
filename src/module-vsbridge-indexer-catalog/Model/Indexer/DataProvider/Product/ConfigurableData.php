@@ -260,6 +260,14 @@ class ConfigurableData implements DataProviderInterface
             $productDTO['price'] = $minPrice;
             $productDTO['final_price'] = min($finalPrice);
             $productDTO['regular_price'] = $minPrice;
+
+            /**
+             * @author Andreas Karlsson <andreas@kodbruket.se>
+             */
+            if ($productDTO['regular_price'] >= $productDTO['final_price']) {
+                $productDTO['special_price'] = $productDTO['final_price'];
+                $productDTO['specialPriceInclTax'] = $productDTO['special_price'];
+            }
         }
 
         $isInStock = $productDTO['stock']['is_in_stock'];
