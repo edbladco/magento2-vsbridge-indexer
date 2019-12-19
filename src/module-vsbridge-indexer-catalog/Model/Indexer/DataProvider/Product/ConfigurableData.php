@@ -244,8 +244,11 @@ class ConfigurableData implements DataProviderInterface
         $hasPrice = $this->hasPrice($productDTO);
 
         foreach ($configurableChildren as $child) {
-            if ($child['stock']['is_in_stock']) {
-                $areChildInStock = 1;
+
+            if (!empty($child['stock'])){
+                if ($child['stock']['is_in_stock']) {
+                    $areChildInStock = 1;
+                }
             }
 
             $childHasPrice = $this->hasPrice($child);
@@ -270,8 +273,12 @@ class ConfigurableData implements DataProviderInterface
             }
         }
 
-        $isInStock = $productDTO['stock']['is_in_stock'];
+        $isInStock = false;
 
+        if (!empty($productDTO['stock'])){
+            $isInStock = $productDTO['stock']['is_in_stock'];
+        }
+        
         if (!$isInStock || !$areChildInStock) {
             $productDTO['stock']['is_in_stock'] = false;
             $productDTO['stock']['stock_status'] = 0;
