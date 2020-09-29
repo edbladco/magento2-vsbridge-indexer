@@ -49,6 +49,10 @@ class CategoryData implements DataProviderInterface
                 'position' => $position,
             ];
 
+            if ($position === 0) {
+                $position = 99999;
+            }
+
             if (!isset($indexData[$productId]['category'])) {
                 $indexData[$productId]['category'] = [];
             }
