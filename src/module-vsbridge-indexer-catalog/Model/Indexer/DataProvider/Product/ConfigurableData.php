@@ -244,12 +244,18 @@ class ConfigurableData implements DataProviderInterface
         $hasPrice = $this->hasPrice($productDTO);
 
         foreach ($configurableChildren as $child) {
-            if ($child['stock']['is_in_stock']) {
-                $areChildInStock = 1;
+
+            if (!empty($child['stock'])){
+                if ($child['stock']['is_in_stock']) {
+                    $areChildInStock = 1;
+                }
             }
 
-            $childPrice[] = $child['price'];
-            $finalPrice[] = $child['final_price'] ?? $child['final_price'] ?? $child['price'];
+            $childHasPrice = $this->hasPrice($child);
+            if ($childHasPrice) {
+                $childPrice[] = $child['price'];
+                $finalPrice[] = $child['final_price'] ?? $child['final_price'] ?? $child['price'];
+            }
         }
 
         if (!$hasPrice && !empty($childPrice)) {
@@ -257,10 +263,22 @@ class ConfigurableData implements DataProviderInterface
             $productDTO['price'] = $minPrice;
             $productDTO['final_price'] = min($finalPrice);
             $productDTO['regular_price'] = $minPrice;
+
+            /**
+             * @author Andreas Karlsson <andreas@kodbruket.se>
+             */
+            if ($productDTO['regular_price'] >= $productDTO['final_price']) {
+                $productDTO['special_price'] = $productDTO['final_price'];
+                $productDTO['specialPriceInclTax'] = $productDTO['special_price'];
+            }
         }
 
-        $isInStock = $productDTO['stock']['is_in_stock'];
+        $isInStock = false;
 
+        if (!empty($productDTO['stock'])){
+            $isInStock = $productDTO['stock']['is_in_stock'];
+        }
+        
         if (!$isInStock || !$areChildInStock) {
             $productDTO['stock']['is_in_stock'] = false;
             $productDTO['stock']['stock_status'] = 0;
